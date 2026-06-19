@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: leadflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-leadflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leadflow_secret_2024}
+      POSTGRES_DB: ${POSTGRES_DB:-leadflow}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-leadflow} -d ${POSTGRES_DB:-leadflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - leadflow-network
+
+  # Redis for BullMQ Queue
+  redis:
+    image: redis:7-alpine
+    container_name: leadflow-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - leadflow-network
+
+  # Backend API (NestJS)
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: leadflow-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-leadflow}:${POSTGRES_PASSWORD:-leadflow_secret_2024}@postgres:5432/${POSTGRES_DB:-leadflow}?schema=public
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-leadflow_jwt_secret_key_2024}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-leadflow_refresh_secret_key_2024}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+      - /app/node_modules
+    networks:
+      - leadflow-network
+
+  # Frontend (Next.js)
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: leadflow-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3001
+      - NODE_ENV=${NODE_ENV:-development}
+    depends_on:
+      - backend
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - leadflow-network
+
+  # Playwright Service for Scraping
+  playwright:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.playwright
+    container_name: leadflow-playwright
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-leadflow}:${POSTGRES_PASSWORD:-leadflow_secret_2024}@postgres:5432/${POSTGRES_DB:-leadflow}?schema=public
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - leadflow-network
+    profiles:
+      - scraping
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  leadflow-network:
+    driver: bridge

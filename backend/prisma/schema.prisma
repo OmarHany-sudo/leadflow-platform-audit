@@ -1,0 +1,715 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// CORE TABLES
+// ============================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  firstName     String
+  lastName      String
+  avatar        String?
+  role          UserRole  @default(SALES_REP)
+  status        UserStatus @default(ACTIVE)
+  
+  // Relations
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String?
+  
+  leadsCreated   Lead[]    @relation("LeadCreatedBy")
+  leadsAssigned  Lead[]    @relation("LeadAssignedTo")
+  messages       Message[]
+  activities     Activity[]
+  notes          Note[]
+  tasks          Task[]
+  campaigns      Campaign[] @relation("CampaignCreatedBy")
+  aiReports      AIReport[]
+  followUps      FollowUp[]
+  
+  // Auth
+  refreshTokens  RefreshToken[]
+  sessions       Session[]
+  
+  // Timestamps
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastLoginAt    DateTime?
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  ipAddress String?
+  userAgent String?
+
+  @@map("sessions")
+}
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  logo        String?
+  website     String?
+  industry    String?
+  
+  // Settings
+  settings    Json?    @default("{}")
+  
+  // Relations
+  users       User[]
+  leads       Lead[]
+  campaigns   Campaign[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("organizations")
+}
+
+// ============================================================
+// LEAD MANAGEMENT
+// ============================================================
+
+model Lead {
+  id              String       @id @default(cuid())
+  
+  // Basic Info
+  businessName    String
+  contactName     String?
+  email           String?
+  phone           String?
+  website         String?
+  industry        String?
+  category        String?
+  
+  // Location
+  address         String?
+  city            String?
+  state           String?
+  country         String?
+  postalCode      String?
+  latitude        Float?
+  longitude       Float?
+  
+  // Social Profiles
+  linkedInUrl     String?
+  facebookUrl     String?
+  twitterUrl      String?
+  instagramUrl    String?
+  
+  // Scoring
+  score           Int          @default(0)
+  temperature     Temperature  @default(COLD)
+  priority        Priority     @default(LOW)
+  
+  // Status
+  status          LeadStatus   @default(NEW)
+  
+  // Source
+  source          LeadSource   @default(MANUAL)
+  sourceUrl       String?
+  sourceConnector String?      // google-maps, linkedin, reddit, etc.
+  
+  // Enriched Data
+  description     String?      @db.Text
+  employeeCount   String?
+  revenue         String?
+  foundedYear     Int?
+  
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  String
+  
+  createdBy       User         @relation("LeadCreatedBy", fields: [createdById], references: [id])
+  createdById     String
+  
+  assignedTo      User?        @relation("LeadAssignedTo", fields: [assignedToId], references: [id])
+  assignedToId    String?
+  
+  // Related
+  messages        Message[]
+  activities      Activity[]
+  notes           Note[]
+  tasks           Task[]
+  websiteAudit    WebsiteAudit?
+  aiReport        AIReport?
+  scoringResults  ScoringResult[]
+  followUps       FollowUp[]
+  campaigns       CampaignLead[]
+  
+  // Signals
+  signals         Json?        @default("[]")
+  
+  // Raw Data
+  rawData         Json?        @default("{}")
+  
+  // Timestamps
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  lastContactedAt DateTime?
+  
+  @@index([organizationId])
+  @@index([status])
+  @@index([temperature])
+  @@index([score])
+  @@index([source])
+  @@index([country, city])
+  @@index([industry])
+  @@index([assignedToId])
+  @@map("leads")
+}
+
+// ============================================================
+// MESSAGING & COMMUNICATION
+// ============================================================
+
+model Message {
+  id          String      @id @default(cuid())
+  type        MessageType
+  subject     String?
+  content     String      @db.Text
+  
+  // For email
+  fromEmail   String?
+  toEmail     String?
+  
+  // For WhatsApp
+  phoneNumber String?
+  
+  // For LinkedIn
+  linkedInUrl String?
+  
+  // Status
+  status      MessageStatus @default(DRAFT)
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  
+  // AI Generated
+  isAIGenerated Boolean   @default(false)
+  aiPrompt    String?     @db.Text
+  
+  // Relations
+  lead        Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId      String
+  
+  sender      User        @relation(fields: [senderId], references: [id])
+  senderId    String
+  
+  campaign    Campaign?   @relation(fields: [campaignId], references: [id])
+  campaignId  String?
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([leadId])
+  @@index([campaignId])
+  @@index([status])
+  @@map("messages")
+}
+
+// ============================================================
+// CAMPAIGNS
+// ============================================================
+
+model Campaign {
+  id              String          @id @default(cuid())
+  name            String
+  description     String?
+  type            CampaignType
+  status          CampaignStatus @default(DRAFT)
+  
+  // Scheduling
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  
+  // Metrics
+  totalLeads      Int             @default(0)
+  sentCount       Int             @default(0)
+  deliveredCount  Int             @default(0)
+  openedCount     Int             @default(0)
+  repliedCount    Int             @default(0)
+  convertedCount  Int             @default(0)
+  
+  // Settings
+  settings        Json?           @default("{}")
+  
+  // Relations
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  String
+  
+  createdBy       User            @relation("CampaignCreatedBy", fields: [createdById], references: [id])
+  createdById     String
+  
+  leads           CampaignLead[]
+  messages        Message[]
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([type])
+  @@map("campaigns")
+}
+
+model CampaignLead {
+  id          String              @id @default(cuid())
+  campaign    Campaign            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId  String
+  lead        Lead                @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId      String
+  status      CampaignLeadStatus  @default(PENDING)
+  sentAt      DateTime?
+  openedAt    DateTime?
+  repliedAt   DateTime?
+  
+  createdAt   DateTime            @default(now())
+  
+  @@unique([campaignId, leadId])
+  @@index([campaignId])
+  @@index([leadId])
+  @@map("campaign_leads")
+}
+
+// ============================================================
+// ACTIVITY TRACKING
+// ============================================================
+
+model Activity {
+  id          String       @id @default(cuid())
+  type        ActivityType
+  description String       @db.Text
+  metadata    Json?        @default("{}")
+  
+  lead        Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId      String
+  
+  user        User         @relation(fields: [userId], references: [id])
+  userId      String
+  
+  createdAt   DateTime     @default(now())
+
+  @@index([leadId])
+  @@index([userId])
+  @@index([type])
+  @@map("activities")
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  content   String   @db.Text
+  
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId    String
+  
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+  @@map("notes")
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  title       String
+  description String?    @db.Text
+  status      TaskStatus @default(TODO)
+  priority    Priority   @default(MEDIUM)
+  dueDate     DateTime?
+  completedAt DateTime?
+  
+  lead        Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId      String
+  
+  assignedTo  User       @relation(fields: [assignedToId], references: [id])
+  assignedToId String
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([leadId])
+  @@index([assignedToId])
+  @@index([status])
+  @@map("tasks")
+}
+
+// ============================================================
+// SCORING & ANALYSIS
+// ============================================================
+
+model ScoringResult {
+  id              String   @id @default(cuid())
+  
+  // Category Scores
+  websiteScore    Int      @default(0)
+  growthScore     Int      @default(0)
+  hiringScore     Int      @default(0)
+  intentScore     Int      @default(0)
+  
+  // Detailed Signals
+  signals         Json     @default("[]")
+  
+  // Total Score
+  totalScore      Int      @default(0)
+  
+  // Factors
+  factors         Json?    @default("[]")
+  
+  // Relations
+  lead            Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId          String   @unique
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("scoring_results")
+}
+
+model WebsiteAudit {
+  id                  String   @id @default(cuid())
+  
+  // Basic Checks
+  url                 String
+  isAccessible        Boolean  @default(false)
+  hasSSL              Boolean  @default(false)
+  sslExpiry           DateTime?
+  
+  // Performance
+  loadTime            Float?   // in seconds
+  pageSize            Float?   // in KB
+  
+  // Mobile
+  isMobileResponsive  Boolean  @default(false)
+  
+  // SEO
+  hasMetaTags         Boolean  @default(false)
+  hasStructuredData   Boolean  @default(false)
+  hasSitemap          Boolean  @default(false)
+  hasRobotsTxt        Boolean  @default(false)
+  
+  // Lighthouse Scores
+  lighthousePerformance Int?
+  lighthouseAccessibility Int?
+  lighthouseBestPractices Int?
+  lighthouseSEO       Int?
+  lighthousePWA       Int?
+  
+  // Details
+  metaTags            Json?    @default("{}")
+  headings            Json?    @default("[]")
+  images              Json?    @default("[]")
+  links               Json?    @default("[]")
+  technologies        Json?    @default("[]")
+  brokenLinks         Json?    @default("[]")
+  
+  // Full Report
+  report              Json?    @default("{}")
+  
+  // Relations
+  lead                Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId              String   @unique
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("website_audits")
+}
+
+model AIReport {
+  id              String   @id @default(cuid())
+  
+  // Business Analysis
+  businessSummary String?  @db.Text
+  industryAnalysis String? @db.Text
+  
+  // Website Analysis
+  websiteAnalysis String?  @db.Text
+  technicalWeaknesses Json? @default("[]")
+  
+  // Opportunities
+  growthSignals   Json?    @default("[]")
+  opportunities   Json?    @default("[]")
+  
+  // Recommendations
+  recommendedServices Json? @default("[]")
+  
+  // Scoring
+  leadTemperature Temperature? @default(COLD)
+  priorityScore   Int?     @default(0)
+  estimatedDealValue String?
+  
+  // Outreach
+  outreachStrategy String? @db.Text
+  recommendedPitch String? @db.Text
+  
+  // Full Report
+  fullReport      Json?    @default("{}")
+  
+  // AI Provider Used
+  aiProvider      String   @default("gemini")
+  modelUsed       String?
+  tokensUsed      Int?
+  
+  // Relations
+  lead            Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId          String   @unique
+  
+  generatedBy     User     @relation(fields: [generatedById], references: [id])
+  generatedById   String
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("ai_reports")
+}
+
+// ============================================================
+// FOLLOW-UPS
+// ============================================================
+
+model FollowUp {
+  id          String           @id @default(cuid())
+  sequence    Int              @default(1)
+  type        FollowUpType
+  content     String           @db.Text
+  status      FollowUpStatus   @default(SCHEDULED)
+  scheduledAt DateTime
+  sentAt      DateTime?
+  
+  // Relations
+  lead        Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId      String
+  
+  user        User             @relation(fields: [userId], references: [id])
+  userId      String
+  
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([leadId])
+  @@index([userId])
+  @@index([status])
+  @@map("follow_ups")
+}
+
+// ============================================================
+// QUEUE JOBS TRACKING
+// ============================================================
+
+model JobLog {
+  id          String     @id @default(cuid())
+  queueName   String
+  jobName     String
+  jobId       String
+  status      JobStatus  @default(PENDING)
+  data        Json?      @default("{}")
+  result      Json?      @default("{}")
+  error       String?    @db.Text
+  
+  startedAt   DateTime?
+  completedAt DateTime?
+  failedAt    DateTime?
+  
+  retryCount  Int        @default(0)
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([queueName])
+  @@index([status])
+  @@index([jobName])
+  @@map("job_logs")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  ADMIN
+  AGENCY_OWNER
+  SALES_MANAGER
+  SALES_REP
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum LeadSource {
+  MANUAL
+  GOOGLE_MAPS
+  LINKEDIN
+  REDDIT
+  TWITTER
+  FACEBOOK
+  PRODUCT_HUNT
+  CRUNCHBASE
+  WELLFOUND
+  CLUTCH
+  GOODFIRMS
+  IMPORT
+  API
+}
+
+enum Temperature {
+  COLD
+  WARM
+  HOT
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+  ARCHIVED
+}
+
+enum MessageType {
+  EMAIL
+  WHATSAPP
+  LINKEDIN
+  CONTACT_FORM
+  COLD_OUTREACH
+  INTERNAL
+}
+
+enum MessageStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum CampaignType {
+  EMAIL
+  WHATSAPP
+  LINKEDIN
+  CUSTOM
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum CampaignLeadStatus {
+  PENDING
+  QUEUED
+  SENT
+  DELIVERED
+  OPENED
+  REPLIED
+  CONVERTED
+  FAILED
+  BOUNCED
+}
+
+enum ActivityType {
+  LEAD_CREATED
+  LEAD_UPDATED
+  LEAD_ASSIGNED
+  STATUS_CHANGED
+  SCORE_UPDATED
+  MESSAGE_SENT
+  EMAIL_OPENED
+  EMAIL_REPLIED
+  WEBSITE_AUDITED
+  AI_REPORT_GENERATED
+  NOTE_ADDED
+  TASK_CREATED
+  TASK_COMPLETED
+  FOLLOW_UP_SENT
+  CAMPAIGN_CREATED
+  CAMPAIGN_STARTED
+  CAMPAIGN_COMPLETED
+  IMPORT_COMPLETED
+  EXPORT_COMPLETED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  OVERDUE
+}
+
+enum FollowUpType {
+  EMAIL
+  WHATSAPP
+  LINKEDIN
+  CALL
+}
+
+enum FollowUpStatus {
+  SCHEDULED
+  SENT
+  REPLIED
+  FAILED
+  CANCELLED
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  RETRYING
+  CANCELLED
+}
